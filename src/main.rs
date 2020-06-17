@@ -72,7 +72,6 @@ async fn accept_loop_inner(mut listener: TcpListener, banned_port: u16) -> Resul
                     println!("{}connect failed", in_to_out_log_tag);
                 },
             }
-            return ()
         });
     }
 }
@@ -85,12 +84,14 @@ async fn accept_loop(listener: TcpListener, banned_port: u16) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener1 = TcpListener::bind("0.0.0.0:1").await?;
     setsockopt(listener1.as_raw_fd(), IpTransparent, &true)?;
-    tokio::spawn(accept_loop(listener1, 1));
+    let task1 = tokio::spawn(accept_loop(listener1, 1));
 
     let listener2 = TcpListener::bind("0.0.0.0:2").await?;
     setsockopt(listener2.as_raw_fd(), IpTransparent, &true)?;
-    tokio::spawn(accept_loop(listener2, 2));
+    let task2 = tokio::spawn(accept_loop(listener2, 1));
 
-    loop {
-    }
+    let _ = task1.await;
+    let _ = task2.await;
+
+    return Ok(());
 }
