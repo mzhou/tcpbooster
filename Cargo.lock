@@ -102,6 +102,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "maligned"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e88c3cbe8288f77f293e48a28b3232e3defd203a6d839fa7f68ea4329e83464"
+
+[[package]]
 name = "memchr"
 version = "2.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -265,6 +271,7 @@ dependencies = [
 name = "tcpbooster"
 version = "0.1.0"
 dependencies = [
+ "maligned",
  "tokio",
 ]
 

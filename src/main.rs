@@ -1,6 +1,7 @@
 use std::io;
 use std::net::SocketAddr;
 
+use maligned::A4k;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -52,13 +53,13 @@ async fn main() -> io::Result<()> {
                             let (mut out_read, mut out_write) = out_sock.into_split();
 
                             tokio::spawn(async move {
-                                let mut buf = [0u8; 65536];
+                                let mut buf =  A4k::default();
                                 println!("{}buf {:p}", &in_to_out_log_tag, &buf);
                                 forward_data(&in_to_out_log_tag, &mut buf, &mut in_read, &mut out_write).await;
                             });
 
                             tokio::spawn(async move {
-                                let mut buf = [0u8; 65536];
+                                let mut buf = A4k::default();
                                 let out_to_in_log_tag = format!("{}<-{} ", in_remote_addr, out_remote_addr);
                                 println!("{}buf {:p}", &out_to_in_log_tag, &buf);
                                 forward_data(&out_to_in_log_tag, &mut buf, &mut out_read, &mut in_write).await;
