@@ -1,7 +1,7 @@
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 
 use maligned::A4k;
-use nix::sys::socket::{setsockopt, sockopt::IpTransparent};
+use nix::sys::socket::{AddressFamily, InetAddr, SockAddr, SockFlag, SockType, bind, setsockopt, socket, sockopt::{IpTransparent, ReuseAddr}};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -10,32 +10,37 @@ async fn forward_data<F: AsyncReadExt+Unpin, T: AsyncWriteExt+Unpin>(log_tag: &s
         match from.read(buf).await {
             Ok(0) => {
                 println!("{}read EOF", log_tag);
-                let _ = to.shutdown();
-                return;
-
+                break;
             },
             Ok(n) => {
                 //println!("{}read {} bytes", log_tag, n);
                 match to.write_all(&buf[..n]).await {
                     Ok(()) => {
-                        //println!("{}write_all success", log_tag);
                     },
-                    _ => {
-                        println!("{}write_all fail", log_tag);
-                        return;
+                    Err(e) => {
+                        println!("{}write_all fail {}", log_tag, e);
+                        break;
                     },
                 }
             },
-            _ => {
-                println!("{}read fail", log_tag);
-                let _ = to.shutdown();
-                return;
+            Err(e) => {
+                println!("{}read fail {}", log_tag, e);
+                break;
             },
         }
     }
+    to.shutdown();
 }
 
-async fn accept_loop_inner(mut listener: TcpListener, banned_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+fn create_bound_socket(addr: &std::net::SocketAddr) -> nix::Result<std::net::TcpStream> {
+    let sock = unsafe{std::net::TcpStream::from_raw_fd(socket(AddressFamily::Inet, SockType::Stream, SockFlag::empty(), None)?)};
+    setsockopt(sock.as_raw_fd(), IpTransparent, &true)?;
+    setsockopt(sock.as_raw_fd(), ReuseAddr, &true)?;
+    bind(sock.as_raw_fd(), &SockAddr::Inet(InetAddr::from_std(addr)))?;
+    return Ok(sock);
+}
+
+async fn accept_loop_inner(mut listener: TcpListener, banned_port: u16) -> Result<(), tokio::io::Error> {
     loop {
         let (in_sock, in_remote_addr) = listener.accept().await?;
         let out_remote_addr = in_sock.local_addr()?;
@@ -45,11 +50,10 @@ async fn accept_loop_inner(mut listener: TcpListener, banned_port: u16) -> Resul
         }
         let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
         println!("{}accept", in_to_out_log_tag);
-        let out_socket2 = socket2::Socket::new(socket2::Domain::ipv4(), socket2::Type::stream(), None)?;
-        setsockopt(out_socket2.as_raw_fd(), IpTransparent, &true)?;
-        out_socket2.bind(&socket2::SockAddr::from(in_remote_addr))?;
         tokio::spawn(async move {
-            match TcpStream::connect_std(out_socket2.into_tcp_stream(), &out_remote_addr).await {
+            match create_bound_socket(&in_remote_addr) {
+            Ok(std_out_sock) => {
+                match TcpStream::connect_std(std_out_sock, &out_remote_addr).await {
                 Ok(out_sock) => {
                     println!("{}connect success", in_to_out_log_tag);
                     let (mut in_read, mut in_write) = in_sock.into_split();
@@ -68,9 +72,14 @@ async fn accept_loop_inner(mut listener: TcpListener, banned_port: u16) -> Resul
                         forward_data(&out_to_in_log_tag, &mut buf, &mut out_read, &mut in_write).await;
                     });
                 },
-                _ => {
-                    println!("{}connect failed", in_to_out_log_tag);
+                Err(e) => {
+                    println!("{}connect failed {}", in_to_out_log_tag, e);
                 },
+                }
+            },
+            Err(e) => {
+                println!("{}bind failed {}", in_to_out_log_tag, e);
+            },
             }
         });
     }

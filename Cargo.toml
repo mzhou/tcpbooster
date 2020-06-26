@@ -9,5 +9,4 @@ edition = "2018"
 [dependencies]
 maligned = { version = "0.2", features = ["align-4k"] }
 nix = { version = "0.17" }
-socket2 = { version = "0.3" }
 tokio = { version = "0.2", features = ["full"] }
