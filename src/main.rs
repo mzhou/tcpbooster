@@ -51,11 +51,17 @@ async fn accept_loop_inner(mut listener: TcpListener, banned_port: u16) -> Resul
         let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
         println!("{}accept", in_to_out_log_tag);
         tokio::spawn(async move {
+            if let Err(e) = in_sock.set_nodelay(true) {
+                println!("{}in set_nodelay failed {}", in_to_out_log_tag, e);
+            }
             match create_bound_socket(&in_remote_addr) {
             Ok(std_out_sock) => {
                 match TcpStream::connect_std(std_out_sock, &out_remote_addr).await {
                 Ok(out_sock) => {
                     println!("{}connect success", in_to_out_log_tag);
+                    if let Err(e) = out_sock.set_nodelay(true) {
+                        println!("{}out set_nodelay failed {}", in_to_out_log_tag, e);
+                    }
                     let (mut in_read, mut in_write) = in_sock.into_split();
                     let (mut out_read, mut out_write) = out_sock.into_split();
 
