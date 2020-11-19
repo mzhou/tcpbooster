@@ -146,6 +146,8 @@ async fn accept_loop(listener: TcpListener, banned_port: u16, default_bind: bool
 }
 
 const DEFAULT_BIND: &str = "DEFAULT_BIND";
+const PORT1: &str = "PORT1";
+const PORT2: &str = "PORT2";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -156,16 +158,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("default-bind")
                 .short("d"),
         )
+        .arg(
+            Arg::with_name(PORT1)
+                .default_value("1")
+                .help("Port 1")
+                .long("port1")
+                .short("1")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name(PORT2)
+                .default_value("2")
+                .help("Port 2")
+                .long("port2")
+                .short("1")
+                .takes_value(true),
+        )
         .get_matches();
     let default_bind = matches.occurrences_of(DEFAULT_BIND) != 0;
+    let port1: u16 = matches.value_of(PORT1).unwrap().parse().unwrap();
+    let port2: u16 = matches.value_of(PORT2).unwrap().parse().unwrap();
 
-    let listener1 = TcpListener::bind("0.0.0.0:1").await?;
+    let listener1 = TcpListener::bind(format!("0.0.0.0:{}", port1)).await?;
     setsockopt(listener1.as_raw_fd(), IpTransparent, &true)?;
-    let task1 = tokio::spawn(accept_loop(listener1, 1, default_bind));
+    let task1 = tokio::spawn(accept_loop(listener1, port1, default_bind));
 
-    let listener2 = TcpListener::bind("0.0.0.0:2").await?;
+    let listener2 = TcpListener::bind(format!("0.0.0.0:{}", port2)).await?;
     setsockopt(listener2.as_raw_fd(), IpTransparent, &true)?;
-    let task2 = tokio::spawn(accept_loop(listener2, 2, default_bind));
+    let task2 = tokio::spawn(accept_loop(listener2, port2, default_bind));
 
     let _ = task1.await;
     let _ = task2.await;
