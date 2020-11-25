@@ -7,6 +7,7 @@ use nix::sys::socket::{
     sockopt::{IpTransparent, ReuseAddr},
     AddressFamily, InetAddr, SockAddr, SockFlag, SockType,
 };
+use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -56,23 +57,10 @@ fn create_bound_socket(addr: &std::net::SocketAddr) -> nix::Result<std::net::Tcp
     return Ok(sock);
 }
 
-fn create_unbound_socket() -> nix::Result<std::net::TcpStream> {
-    let sock = unsafe {
-        std::net::TcpStream::from_raw_fd(socket(
-            AddressFamily::Inet,
-            SockType::Stream,
-            SockFlag::empty(),
-            None,
-        )?)
-    };
-    setsockopt(sock.as_raw_fd(), ReuseAddr, &true)?;
-    return Ok(sock);
-}
-
 async fn accept_loop_inner(
     mut listener: TcpListener,
     banned_port: u16,
-    default_bind: bool,
+    bind: Option<SocketAddr>,
 ) -> Result<(), tokio::io::Error> {
     loop {
         let (in_sock, in_remote_addr) = listener.accept().await?;
@@ -87,11 +75,7 @@ async fn accept_loop_inner(
             if let Err(e) = in_sock.set_nodelay(true) {
                 println!("{}in set_nodelay failed {}", in_to_out_log_tag, e);
             }
-            match if default_bind {
-                create_unbound_socket()
-            } else {
-                create_bound_socket(&in_remote_addr)
-            } {
+            match create_bound_socket(&bind.unwrap_or(in_remote_addr)) {
                 Ok(std_out_sock) => {
                     match TcpStream::connect_std(std_out_sock, &out_remote_addr).await {
                         Ok(out_sock) => {
@@ -141,11 +125,11 @@ async fn accept_loop_inner(
     }
 }
 
-async fn accept_loop(listener: TcpListener, banned_port: u16, default_bind: bool) {
-    let _ = accept_loop_inner(listener, banned_port, default_bind).await;
+async fn accept_loop(listener: TcpListener, banned_port: u16, bind: Option<SocketAddr>) {
+    let _ = accept_loop_inner(listener, banned_port, bind).await;
 }
 
-const DEFAULT_BIND: &str = "DEFAULT_BIND";
+const BIND: &str = "BIND";
 const PORT1: &str = "PORT1";
 const PORT2: &str = "PORT2";
 
@@ -153,10 +137,11 @@ const PORT2: &str = "PORT2";
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("tcpbooster")
         .arg(
-            Arg::with_name(DEFAULT_BIND)
-                .help("Don't bind outgoing connection to original source address and port")
-                .long("default-bind")
-                .short("d"),
+            Arg::with_name(BIND)
+                .help("Bind outgoing connections to this address")
+                .long("bind")
+                .short("b")
+                .takes_value(true),
         )
         .arg(
             Arg::with_name(PORT1)
@@ -175,20 +160,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .takes_value(true),
         )
         .get_matches();
-    let default_bind = matches.occurrences_of(DEFAULT_BIND) != 0;
+    let bind: Option<SocketAddr> = if let Some(v) = matches.value_of(BIND) { Some(v.parse()?) } else { None };
+    println!("bind {:?} {:?}", matches.value_of(BIND), bind);
     let port1: u16 = matches.value_of(PORT1).unwrap().parse().unwrap();
     let port2: u16 = matches.value_of(PORT2).unwrap().parse().unwrap();
 
     let listener1 = TcpListener::bind(format!("0.0.0.0:{}", port1)).await?;
     setsockopt(listener1.as_raw_fd(), IpTransparent, &true)?;
-    let task1 = tokio::spawn(accept_loop(listener1, port1, default_bind));
+    let task1 = tokio::spawn(accept_loop(listener1, port1, bind));
 
     let listener2 = TcpListener::bind(format!("0.0.0.0:{}", port2)).await?;
     setsockopt(listener2.as_raw_fd(), IpTransparent, &true)?;
-    let task2 = tokio::spawn(accept_loop(listener2, port2, default_bind));
+    let task2 = tokio::spawn(accept_loop(listener2, port2, bind));
 
     let _ = task1.await;
     let _ = task2.await;
 
-    return Ok(());
+    Ok(())
 }
