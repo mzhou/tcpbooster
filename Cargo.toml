@@ -11,3 +11,4 @@ clap = { version = "2" }
 maligned = { version = "0.2", features = ["align-4k"] }
 nix = { version = "0.17" }
 tokio = { version = "0.2", features = ["full"] }
+tokio-socks = { version = "0.3" }
