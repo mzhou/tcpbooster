@@ -31,16 +31,17 @@ impl SetSockOpt for TcpMaxSeg {
 
     fn set(&self, fd: RawFd, val: &Self::Val) -> nix::Result<()> {
         unsafe {
-            let mut ffi_val = val;
+            let ffi_val = *val;
             let len = core::mem::size_of::<Self::Val>() as socklen_t;
             let res = setsockopt(
                 fd,
                 IPPROTO_TCP,
                 TCP_MAXSEG,
-                &mut ffi_val as *mut _ as *mut c_void,
+                &ffi_val as *const _ as *const c_void,
                 len,
             );
-            nix::errno::Errno::result(res)?;
+            let result = nix::errno::Errno::result(res);
+            result?;
             Ok(())
         }
     }

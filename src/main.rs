@@ -83,12 +83,13 @@ impl fmt::Display for SocketError {
     }
 }
 
-fn create_bound_socket(addr: std::net::SocketAddr) -> Result<TcpSocket, SocketError> {
-    let sock = TcpSocket::new_v6()?;
+fn create_bound_socket(addr: std::net::SocketAddr, mss: i32) -> Result<TcpSocket, SocketError> {
+    let sock = if addr.is_ipv4() { TcpSocket::new_v4() } else { TcpSocket::new_v6() }?;
+    setsockopt(sock.as_raw_fd(), TcpMaxSeg, &mss)?;
     setsockopt(sock.as_raw_fd(), IpTransparent, &true)?;
     sock.set_reuseaddr(true)?;
     sock.bind(addr)?;
-    return Ok(sock);
+    Ok(sock)
 }
 
 #[derive(Clone)]
@@ -111,8 +112,7 @@ async fn create_outgoing_socket(
     connect_addr: &std::net::SocketAddr,
     mss: i32,
 ) -> Result<TcpStream, SocketError> {
-    let std_out_sock = create_bound_socket(bind_addr)?;
-    setsockopt(std_out_sock.as_raw_fd(), TcpMaxSeg, &mss)?;
+    let std_out_sock = create_bound_socket(bind_addr, mss)?;
     if let Some(socks) = socks {
         let tokio_out_sock = std_out_sock.connect(socks.server).await?;
         tokio_socks::tcp::Socks5Stream::connect_with_password_and_socket(
