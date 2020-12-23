@@ -4,13 +4,12 @@ use std::os::unix::io::AsRawFd;
 
 use clap::{App, Arg};
 use maligned::A4k;
-use nix::sys::socket::{
-    setsockopt,
-    sockopt::IpTransparent,
-};
+use nix::sys::socket::{setsockopt, sockopt::IpTransparent};
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
+
+mod nix_ext;
 
 async fn forward_data<F: AsyncReadExt + Unpin, T: AsyncWriteExt + Unpin>(
     log_tag: &str,
@@ -64,15 +63,18 @@ impl From<std::io::Error> for SocketError {
 impl fmt::Display for SocketError {
     fn fmt(self: &Self, f: &mut fmt::Formatter) -> fmt::Result {
         use SocketError::*;
-        write!(f, "{}", match self {
-            Nix(e) => format!("Nix({})", e),
-            StdIo(e) => format!("StdIo({})", e),
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                Nix(e) => format!("Nix({})", e),
+                StdIo(e) => format!("StdIo({})", e),
+            }
+        )
     }
 }
 
-impl Error for SocketError {
-}
+impl Error for SocketError {}
 
 fn create_bound_socket(addr: std::net::SocketAddr) -> Result<TcpSocket, SocketError> {
     let sock = TcpSocket::new_v6()?;
@@ -98,10 +100,10 @@ struct Config {
 // TODO: proper error bubbling
 async fn create_outgoing_socket(
     socks: Option<SocksConfig>,
-    bind_addr: &std::net::SocketAddr,
+    bind_addr: std::net::SocketAddr,
     connect_addr: &std::net::SocketAddr,
 ) -> Result<TcpStream, Box<dyn Error>> {
-    let std_out_sock = create_bound_socket(*bind_addr)?;
+    let std_out_sock = create_bound_socket(bind_addr)?;
     if let Some(socks) = socks {
         let tokio_out_sock = std_out_sock.connect(socks.server).await?;
         tokio_socks::tcp::Socks5Stream::connect_with_password_and_socket(
@@ -114,7 +116,10 @@ async fn create_outgoing_socket(
         .map(|s| s.into_inner())
         .map_err(|e| e.into())
     } else {
-        std_out_sock.connect(*connect_addr).await.map_err(|e| e.into())
+        std_out_sock
+            .connect(*connect_addr)
+            .await
+            .map_err(|e| e.into())
     }
 }
 
@@ -139,7 +144,7 @@ async fn accept_loop_inner(
                     println!("{}in set_nodelay failed {}", in_to_out_log_tag, e);
                 }
                 let bind_addr = config.bind.unwrap_or(in_remote_addr);
-                match create_outgoing_socket(config.socks, &bind_addr, &out_remote_addr).await {
+                match create_outgoing_socket(config.socks, bind_addr, &out_remote_addr).await {
                     Ok(out_sock) => {
                         println!("{}connect success", in_to_out_log_tag);
                         if let Err(e) = out_sock.set_nodelay(true) {
