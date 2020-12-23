@@ -1,16 +1,16 @@
 use std::error::Error;
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::fmt;
+use std::os::unix::io::AsRawFd;
 
 use clap::{App, Arg};
 use maligned::A4k;
 use nix::sys::socket::{
-    bind, setsockopt, socket,
-    sockopt::{IpTransparent, ReuseAddr},
-    AddressFamily, InetAddr, SockAddr, SockFlag, SockType,
+    setsockopt,
+    sockopt::IpTransparent,
 };
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
 async fn forward_data<F: AsyncReadExt + Unpin, T: AsyncWriteExt + Unpin>(
     log_tag: &str,
@@ -40,21 +40,45 @@ async fn forward_data<F: AsyncReadExt + Unpin, T: AsyncWriteExt + Unpin>(
             }
         }
     }
-    to.shutdown();
+    let _ = to.shutdown().await;
 }
 
-fn create_bound_socket(addr: &std::net::SocketAddr) -> nix::Result<std::net::TcpStream> {
-    let sock = unsafe {
-        std::net::TcpStream::from_raw_fd(socket(
-            AddressFamily::Inet,
-            SockType::Stream,
-            SockFlag::empty(),
-            None,
-        )?)
-    };
+#[derive(Debug)]
+enum SocketError {
+    Nix(nix::Error),
+    StdIo(std::io::Error),
+}
+
+impl From<nix::Error> for SocketError {
+    fn from(e: nix::Error) -> SocketError {
+        Self::Nix(e)
+    }
+}
+
+impl From<std::io::Error> for SocketError {
+    fn from(e: std::io::Error) -> SocketError {
+        Self::StdIo(e)
+    }
+}
+
+impl fmt::Display for SocketError {
+    fn fmt(self: &Self, f: &mut fmt::Formatter) -> fmt::Result {
+        use SocketError::*;
+        write!(f, "{}", match self {
+            Nix(e) => format!("Nix({})", e),
+            StdIo(e) => format!("StdIo({})", e),
+        })
+    }
+}
+
+impl Error for SocketError {
+}
+
+fn create_bound_socket(addr: std::net::SocketAddr) -> Result<TcpSocket, SocketError> {
+    let sock = TcpSocket::new_v6()?;
     setsockopt(sock.as_raw_fd(), IpTransparent, &true)?;
-    setsockopt(sock.as_raw_fd(), ReuseAddr, &true)?;
-    bind(sock.as_raw_fd(), &SockAddr::Inet(InetAddr::from_std(addr)))?;
+    sock.set_reuseaddr(true)?;
+    sock.bind(addr)?;
     return Ok(sock);
 }
 
@@ -77,9 +101,9 @@ async fn create_outgoing_socket(
     bind_addr: &std::net::SocketAddr,
     connect_addr: &std::net::SocketAddr,
 ) -> Result<TcpStream, Box<dyn Error>> {
-    let std_out_sock = create_bound_socket(bind_addr)?;
+    let std_out_sock = create_bound_socket(*bind_addr)?;
     if let Some(socks) = socks {
-        let tokio_out_sock = TcpStream::connect_std(std_out_sock, &socks.server).await?;
+        let tokio_out_sock = std_out_sock.connect(socks.server).await?;
         tokio_socks::tcp::Socks5Stream::connect_with_password_and_socket(
             tokio_out_sock,
             connect_addr,
@@ -90,14 +114,12 @@ async fn create_outgoing_socket(
         .map(|s| s.into_inner())
         .map_err(|e| e.into())
     } else {
-        TcpStream::connect_std(std_out_sock, &connect_addr)
-            .await
-            .map_err(|e| e.into())
+        std_out_sock.connect(*connect_addr).await.map_err(|e| e.into())
     }
 }
 
 async fn accept_loop_inner(
-    mut listener: TcpListener,
+    listener: TcpListener,
     banned_port: u16,
     config: Config,
 ) -> Result<(), tokio::io::Error> {
