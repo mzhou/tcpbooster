@@ -141,7 +141,7 @@ async fn accept_loop_inner(
         let (in_sock, in_remote_addr) = listener.accept().await?;
         let out_remote_addr = in_sock.local_addr()?;
         if out_remote_addr.port() == banned_port {
-            println!("deny direct port {} connection", banned_port);
+            println!("deny direct port {} connection {}->{}", banned_port, in_remote_addr, out_remote_addr);
             continue;
         }
         let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
