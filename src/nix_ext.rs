@@ -4,7 +4,7 @@ use libc::{c_void, getsockopt, setsockopt, socklen_t, IPPROTO_TCP, TCP_MAXSEG};
 use nix::sys::socket::{GetSockOpt, SetSockOpt};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct TcpMaxSeg {}
+pub struct TcpMaxSeg;
 
 impl GetSockOpt for TcpMaxSeg {
     type Val = i32;

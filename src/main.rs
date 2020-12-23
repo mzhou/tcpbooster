@@ -1,15 +1,16 @@
-use std::error::Error;
 use std::fmt;
 use std::os::unix::io::AsRawFd;
 
 use clap::{App, Arg};
 use maligned::A4k;
-use nix::sys::socket::{setsockopt, sockopt::IpTransparent};
+use nix::sys::socket::{getsockopt, setsockopt, sockopt::IpTransparent};
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
 mod nix_ext;
+
+use nix_ext::TcpMaxSeg;
 
 async fn forward_data<F: AsyncReadExt + Unpin, T: AsyncWriteExt + Unpin>(
     log_tag: &str,
@@ -46,6 +47,7 @@ async fn forward_data<F: AsyncReadExt + Unpin, T: AsyncWriteExt + Unpin>(
 enum SocketError {
     Nix(nix::Error),
     StdIo(std::io::Error),
+    TokioSocks(tokio_socks::Error),
 }
 
 impl From<nix::Error> for SocketError {
@@ -60,6 +62,12 @@ impl From<std::io::Error> for SocketError {
     }
 }
 
+impl From<tokio_socks::Error> for SocketError {
+    fn from(e: tokio_socks::Error) -> SocketError {
+        Self::TokioSocks(e)
+    }
+}
+
 impl fmt::Display for SocketError {
     fn fmt(self: &Self, f: &mut fmt::Formatter) -> fmt::Result {
         use SocketError::*;
@@ -69,12 +77,11 @@ impl fmt::Display for SocketError {
             match self {
                 Nix(e) => format!("Nix({})", e),
                 StdIo(e) => format!("StdIo({})", e),
+                TokioSocks(e) => format!("TokioSocks({})", e),
             }
         )
     }
 }
-
-impl Error for SocketError {}
 
 fn create_bound_socket(addr: std::net::SocketAddr) -> Result<TcpSocket, SocketError> {
     let sock = TcpSocket::new_v6()?;
@@ -102,8 +109,10 @@ async fn create_outgoing_socket(
     socks: Option<SocksConfig>,
     bind_addr: std::net::SocketAddr,
     connect_addr: &std::net::SocketAddr,
-) -> Result<TcpStream, Box<dyn Error>> {
+    mss: i32,
+) -> Result<TcpStream, SocketError> {
     let std_out_sock = create_bound_socket(bind_addr)?;
+    setsockopt(std_out_sock.as_raw_fd(), TcpMaxSeg, &mss)?;
     if let Some(socks) = socks {
         let tokio_out_sock = std_out_sock.connect(socks.server).await?;
         tokio_socks::tcp::Socks5Stream::connect_with_password_and_socket(
@@ -113,8 +122,8 @@ async fn create_outgoing_socket(
             socks.password.as_str(),
         )
         .await
-        .map(|s| s.into_inner())
         .map_err(|e| e.into())
+        .map(|s| s.into_inner())
     } else {
         std_out_sock
             .connect(*connect_addr)
@@ -127,7 +136,7 @@ async fn accept_loop_inner(
     listener: TcpListener,
     banned_port: u16,
     config: Config,
-) -> Result<(), tokio::io::Error> {
+) -> Result<(), SocketError> {
     loop {
         let (in_sock, in_remote_addr) = listener.accept().await?;
         let out_remote_addr = in_sock.local_addr()?;
@@ -136,7 +145,8 @@ async fn accept_loop_inner(
             continue;
         }
         let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
-        println!("{}accept", in_to_out_log_tag);
+        let mss = getsockopt(in_sock.as_raw_fd(), TcpMaxSeg)?;
+        println!("{}accept mss {}", in_to_out_log_tag, mss);
         tokio::spawn({
             let config = config.clone();
             async move {
@@ -144,9 +154,10 @@ async fn accept_loop_inner(
                     println!("{}in set_nodelay failed {}", in_to_out_log_tag, e);
                 }
                 let bind_addr = config.bind.unwrap_or(in_remote_addr);
-                match create_outgoing_socket(config.socks, bind_addr, &out_remote_addr).await {
+                match create_outgoing_socket(config.socks, bind_addr, &out_remote_addr, mss).await {
                     Ok(out_sock) => {
-                        println!("{}connect success", in_to_out_log_tag);
+                        let out_mss = getsockopt(out_sock.as_raw_fd(), TcpMaxSeg).unwrap_or(-1);
+                        println!("{}connect success mss {}", in_to_out_log_tag, out_mss);
                         if let Err(e) = out_sock.set_nodelay(true) {
                             println!("{}out set_nodelay failed {}", in_to_out_log_tag, e);
                         }
