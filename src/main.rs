@@ -139,15 +139,15 @@ async fn accept_loop_inner(
 ) -> Result<(), SocketError> {
     loop {
         let (in_sock, in_remote_addr) = listener.accept().await?;
-        let out_remote_addr = in_sock.local_addr()?;
-        if out_remote_addr.port() == banned_port {
-            println!("deny direct port {} connection {}->{}", banned_port, in_remote_addr, out_remote_addr);
-            continue;
-        }
-        let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
-        let mss = getsockopt(in_sock.as_raw_fd(), TcpMaxSeg)?;
-        println!("{}accept mss {}", in_to_out_log_tag, mss);
         tokio::spawn({
+            let out_remote_addr = in_sock.local_addr()?;
+            if out_remote_addr.port() == banned_port {
+                println!("deny direct port {} connection {}->{}", banned_port, in_remote_addr, out_remote_addr);
+                continue;
+            }
+            let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
+            let mss = getsockopt(in_sock.as_raw_fd(), TcpMaxSeg)?;
+            println!("{}accept mss {}", in_to_out_log_tag, mss);
             let config = config.clone();
             async move {
                 if let Err(e) = in_sock.set_nodelay(true) {
