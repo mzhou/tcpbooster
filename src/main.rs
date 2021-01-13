@@ -200,7 +200,8 @@ async fn accept_loop_inner(
 }
 
 async fn accept_loop(listener: TcpListener, banned_port: u16, config: Config) {
-    let _ = accept_loop_inner(listener, banned_port, config).await;
+    let result = accept_loop_inner(listener, banned_port, config).await;
+    println!("accept_loop_inner returned {:?}", result);
 }
 
 const BIND: &str = "BIND";
