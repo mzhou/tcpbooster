@@ -9,8 +9,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
 mod nix_ext;
+mod tokio_socks_ext;
 
 use nix_ext::TcpMaxSeg;
+use tokio_socks_ext::auto_connect_with_password_and_socket;
 
 async fn forward_data<F: AsyncReadExt + Unpin, T: AsyncWriteExt + Unpin>(
     log_tag: &str,
@@ -84,7 +86,11 @@ impl fmt::Display for SocketError {
 }
 
 fn create_bound_socket(addr: std::net::SocketAddr, mss: i32) -> Result<TcpSocket, SocketError> {
-    let sock = if addr.is_ipv4() { TcpSocket::new_v4() } else { TcpSocket::new_v6() }?;
+    let sock = if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }?;
     setsockopt(sock.as_raw_fd(), TcpMaxSeg, &mss)?;
     setsockopt(sock.as_raw_fd(), IpTransparent, &true)?;
     sock.set_reuseaddr(true)?;
@@ -115,7 +121,7 @@ async fn create_outgoing_socket(
     let std_out_sock = create_bound_socket(bind_addr, mss)?;
     if let Some(socks) = socks {
         let tokio_out_sock = std_out_sock.connect(socks.server).await?;
-        tokio_socks::tcp::Socks5Stream::connect_with_password_and_socket(
+        auto_connect_with_password_and_socket(
             tokio_out_sock,
             connect_addr,
             socks.username.as_str(),
@@ -142,7 +148,10 @@ async fn accept_loop_inner(
         tokio::spawn({
             let out_remote_addr = in_sock.local_addr()?;
             if out_remote_addr.port() == banned_port {
-                println!("deny direct port {} connection {}->{}", banned_port, in_remote_addr, out_remote_addr);
+                println!(
+                    "deny direct port {} connection {}->{}",
+                    banned_port, in_remote_addr, out_remote_addr
+                );
                 continue;
             }
             let in_to_out_log_tag = format!("{}->{} ", in_remote_addr, out_remote_addr);
